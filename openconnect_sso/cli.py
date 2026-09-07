@@ -85,6 +85,33 @@ def create_argparser():
         default="",
     )
 
+    nm_settings = parser.add_argument_group(
+        "NetworkManager",
+        "Let NetworkManager own the tunnel instead of running openconnect directly. "
+        "The authenticated session is handed to NetworkManager's openconnect plugin, "
+        "so the connection shows up in the desktop applet and is torn down with "
+        "`nmcli connection down`.",
+    )
+    nm_settings.add_argument(
+        "-N",
+        "--network-manager",
+        dest="network_manager",
+        help="Connect through NetworkManager. Optionally takes the name of the "
+        "NetworkManager VPN connection to activate, defaulting to the profile name. "
+        "The connection is created if it does not exist yet.",
+        metavar="CONNECTION-NAME",
+        nargs="?",
+        const=True,
+        default=None,
+    )
+    nm_settings.add_argument(
+        "--no-nm-create",
+        dest="nm_create",
+        help="Fail instead of creating the NetworkManager connection when it is missing",
+        action="store_false",
+        default=True,
+    )
+
     parser.add_argument(
         "-V", "--version", action="version", version=f"%(prog)s {__version__}"
     )
@@ -114,6 +141,13 @@ def create_argparser():
     credentials_group = parser.add_argument_group("Credentials for automatic login")
     credentials_group.add_argument(
         "-u", "--user", help="Authenticate as the given user", default=None
+    )
+    credentials_group.add_argument(
+        "--no-totp",
+        help="Never ask for or use a TOTP secret. Use this when the second factor "
+        "is approved out of band, for example a push notification",
+        action="store_true",
+        default=False,
     )
     return parser
 

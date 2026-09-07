@@ -1,5 +1,6 @@
 import asyncio
 import json
+import logging
 import multiprocessing
 import signal
 import sys
@@ -76,6 +77,11 @@ class Process(multiprocessing.Process):
         self._states = multiprocessing.Queue()
         self.proxy = proxy
         self.display_mode = display_mode
+        # Depending on the start method the child may be a fresh interpreter
+        # that never ran the parent's logging setup, which would silently drop
+        # every message the browser produces -- including the ones explaining
+        # why auto-login did not fill a field.
+        self.log_level = logging.getLogger().level
 
     def authenticate_at(self, url, credentials):
         self._commands.put(StartupInfo(url, credentials))
@@ -96,6 +102,10 @@ class Process(multiprocessing.Process):
 
         signal.signal(signal.SIGTERM, on_sigterm)
         signal.signal(signal.SIGINT, signal.SIG_DFL)
+
+        from openconnect_sso.app import configure_logger
+
+        configure_logger(logging.getLogger(), self.log_level)
 
         cfg = config.load()
 
@@ -201,12 +211,22 @@ def on_sigterm(signum, frame):
     exit_timer.start(1000)  # ms
 
 
+class WebPage(QWebEnginePage):
+    """A page that forwards what the auto-fill script reports to our log."""
+
+    def javaScriptConsoleMessage(self, level, message, line, source):
+        if message.startswith("openconnect-sso:"):
+            logger.info("Auto-fill", message=message[len("openconnect-sso:") :].strip())
+        else:
+            logger.debug("Console message", message=message, line=line, source=source)
+
+
 class WebBrowser(QWebEngineView):
     def __init__(self, auto_fill_rules, on_update, profile):
         super().__init__()
         self._on_update = on_update
         self._auto_fill_rules = auto_fill_rules
-        page = QWebEnginePage(profile, self)
+        page = WebPage(profile, self)
         self.setPage(page)
         cookie_store = self.page().profile().cookieStore()
         cookie_store.cookieAdded.connect(self._on_cookie_added)
@@ -237,7 +257,10 @@ class WebBrowser(QWebEngineView):
 // @include {url_pattern}
 // ==/UserScript==
 
+{AUTO_FILL_HELPERS}
+
 function autoFill() {{
+    var filled = false;
     {get_selectors(rules, credentials)}
     setTimeout(autoFill, 1000);
 }}
@@ -294,19 +317,95 @@ def to_str(qval):
     return bytes(qval).decode()
 
 
+# Modern identity providers (Entra ID among them) render their login forms with
+# frameworks that track input values internally, so assigning to `elem.value`
+# is silently ignored on submit. Going through the native property setter
+# bypasses that tracking, and the bubbling `input`/`change` events afterwards
+# make the framework pick the new value up.
+AUTO_FILL_HELPERS = """
+// Login pages routinely carry several elements matching the same selector: a
+// visible field plus a hidden one that the form actually posts, or an error
+// container that is rendered empty until there is something to say. Acting on
+// `querySelector`'s first match therefore types into the wrong element and
+// reports success. Only elements that are laid out and visible count.
+function ocssFind(selector) {
+    var candidates = document.querySelectorAll(selector);
+    for (var i = 0; i < candidates.length; i++) {
+        var elem = candidates[i];
+        if (elem.disabled || elem.getClientRects().length === 0) {
+            continue;
+        }
+        if (window.getComputedStyle(elem).visibility === "hidden") {
+            continue;
+        }
+        return elem;
+    }
+    return null;
+}
+
+// `stop` rules guard against hammering an identity provider with a password it
+// has already rejected, so they have to trigger on an error actually being
+// shown -- AD FS keeps an empty error container in the DOM at all times.
+function ocssMessage(selector) {
+    var candidates = document.querySelectorAll(selector);
+    for (var i = 0; i < candidates.length; i++) {
+        if (candidates[i].textContent.trim().length > 0) {
+            return candidates[i];
+        }
+    }
+    return null;
+}
+
+function ocssFill(elem, name, value) {
+    if (elem.readOnly || elem.value === value) {
+        return false;
+    }
+    console.log("openconnect-sso: filling " + name);
+    var setter = Object.getOwnPropertyDescriptor(
+        Object.getPrototypeOf(elem), "value"
+    );
+    elem.focus();
+    if (setter && setter.set) {
+        setter.set.call(elem, value);
+    } else {
+        elem.value = value;
+    }
+    elem.dispatchEvent(new Event("input", { bubbles: true }));
+    elem.dispatchEvent(new Event("change", { bubbles: true }));
+    elem.dispatchEvent(new Event("blur"));
+    return true;
+}
+
+function ocssClick(elem, name) {
+    console.log("openconnect-sso: clicking " + name);
+    elem.focus();
+    elem.click();
+    return true;
+}
+"""
+
+
 def get_selectors(rules, credentials):
     statements = []
     for rule in rules:
         selector = json.dumps(rule.selector)
+        if rule.requires and not getattr(credentials, rule.requires, None):
+            logger.debug(
+                "Skipping rule, required credential not available",
+                selector=rule.selector,
+                requires=rule.requires,
+            )
+            continue
         if rule.action == "stop":
             statements.append(
-                f"""var elem = document.querySelector({selector}); if (elem) {{ return; }}"""
+                f"""var elem = ocssMessage({selector}); if (elem) {{ console.log("openconnect-sso: stopping at " + {selector}); return; }}"""
             )
         elif rule.fill:
-            value = json.dumps(getattr(credentials, rule.fill, None))
-            if value:
+            credential = getattr(credentials, rule.fill, None)
+            if credential:
+                value = json.dumps(credential)
                 statements.append(
-                    f"""var elem = document.querySelector({selector}); if (elem) {{ elem.dispatchEvent(new Event("focus")); elem.value = {value}; elem.dispatchEvent(new Event("blur")); }}"""
+                    f"""var elem = ocssFind({selector}); if (elem) {{ filled = ocssFill(elem, {selector}, {value}) || filled; }}"""
                 )
             else:
                 logger.warning(
@@ -315,7 +414,10 @@ def get_selectors(rules, credentials):
                     possibilities=dir(credentials),
                 )
         elif rule.action == "click":
+            # Only submit once nothing was typed in this pass: a form filled
+            # and submitted within the same tick tends to be submitted before
+            # the page has processed the new value.
             statements.append(
-                f"""var elem = document.querySelector({selector}); if (elem) {{ elem.dispatchEvent(new Event("focus")); elem.click(); }}"""
+                f"""if (!filled) {{ var elem = ocssFind({selector}); if (elem) {{ ocssClick(elem, {selector}); }} }}"""
             )
     return "\n".join(statements)

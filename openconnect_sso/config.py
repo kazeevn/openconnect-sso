@@ -24,7 +24,7 @@ def load():
         return Config()
     with config_path.open() as config_file:
         try:
-            return Config.from_dict(toml.load(config_file))
+            cfg = Config.from_dict(toml.load(config_file))
         except Exception:
             logger.error(
                 "Could not load configuration file, ignoring",
@@ -32,6 +32,13 @@ def load():
                 exc_info=True,
             )
             return Config()
+    if _is_superseded(cfg.auto_fill_rules):
+        logger.info(
+            "Replacing untouched auto-fill rules with the current defaults",
+            path=config_path,
+        )
+        cfg.auto_fill_rules = _converted_default_auto_fill_rules()
+    return cfg
 
 
 def save(config):
@@ -81,26 +88,76 @@ class AutoFillRule(ConfigNode):
     selector = attr.ib()
     fill = attr.ib(default=None)
     action = attr.ib(default=None)
+    # Name of a credential (`username`, `password`, `totp`) that has to be
+    # available for the rule to be applied at all. Rules guarding a branch of
+    # the login flow that only makes sense for a given credential -- like the
+    # Entra ID "sign in another way" -> "authenticator code" detour -- use this
+    # so that they do not hijack a flow the user wants to complete by hand,
+    # such as approving a push notification on their phone.
+    requires = attr.ib(default=None)
 
 
 def get_default_auto_fill_rules():
     return {
         "https://*": [
             AutoFillRule(selector="div[id=passwordError]", action="stop").as_dict(),
+            # AD FS shows its error in a container that is always in the DOM,
+            # so this only stops the loop once the container is visible.
+            AutoFillRule(selector="span[id=errorText]", action="stop").as_dict(),
+            AutoFillRule(selector="input[name=loginfmt]", fill="username").as_dict(),
             AutoFillRule(selector="input[type=email]", fill="username").as_dict(),
             AutoFillRule(selector="input[name=passwd]", fill="password").as_dict(),
+            # AD FS, which Entra ID hands the password step to for federated
+            # domains. Its submit control is a <span>, not a button.
+            AutoFillRule(selector="input[id=passwordInput]", fill="password").as_dict(),
             AutoFillRule(
                 selector="input[data-report-event=Signin_Submit]", action="click"
             ).as_dict(),
+            AutoFillRule(selector="span[id=submitButton]", action="click").as_dict(),
             AutoFillRule(
-                selector="div[data-value=PhoneAppOTP]", action="click"
+                selector="div[data-value=PhoneAppOTP]", action="click", requires="totp"
             ).as_dict(),
-            AutoFillRule(selector="a[id=signInAnotherWay]", action="click").as_dict(),
             AutoFillRule(
-                selector="input[id=idTxtBx_SAOTCC_OTC]", fill="totp"
+                selector="a[id=signInAnotherWay]", action="click", requires="totp"
+            ).as_dict(),
+            AutoFillRule(
+                selector="input[id=idTxtBx_SAOTCC_OTC]", fill="totp", requires="totp"
             ).as_dict(),
         ]
     }
+
+
+def _converted_default_auto_fill_rules():
+    return {
+        name: [AutoFillRule.from_dict(r) for r in rules]
+        for name, rules in get_default_auto_fill_rules().items()
+    }
+
+
+# Rule sets that earlier versions wrote into config.toml verbatim. A stored set
+# that still matches one of these has never been touched by the user, so it is
+# safe to replace it with the current defaults instead of leaving the user
+# stuck with rules that no longer match the identity provider's login page.
+SUPERSEDED_AUTO_FILL_RULES = [
+    [
+        ("div[id=passwordError]", None, "stop", None),
+        ("input[type=email]", "username", None, None),
+        ("input[name=passwd]", "password", None, None),
+        ("input[data-report-event=Signin_Submit]", None, "click", None),
+        ("div[data-value=PhoneAppOTP]", None, "click", None),
+        ("a[id=signInAnotherWay]", None, "click", None),
+        ("input[id=idTxtBx_SAOTCC_OTC]", "totp", None, None),
+    ],
+]
+
+
+def _is_superseded(auto_fill_rules):
+    if list(auto_fill_rules) != ["https://*"]:
+        return False
+    stored = [
+        (r.selector, r.fill, r.action, r.requires) for r in auto_fill_rules["https://*"]
+    ]
+    return stored in SUPERSEDED_AUTO_FILL_RULES
 
 
 @attr.s
@@ -123,13 +180,23 @@ class Credentials(ConfigNode):
             logger.info("Cannot save password to keyring.")
 
     @property
-    def totp(self):
+    def totp_secret(self):
+        """The stored TOTP secret.
+
+        `None` means no answer was ever recorded, an empty string means the
+        user explicitly declined to use one -- the two must stay
+        distinguishable so that declining is not asked about on every run.
+        """
         try:
-            totpsecret = keyring.get_password(APP_NAME, "totp/" + self.username)
-            return pyotp.TOTP(totpsecret).now() if totpsecret else None
+            return keyring.get_password(APP_NAME, "totp/" + self.username)
         except keyring.errors.KeyringError:
             logger.info("Cannot retrieve saved totp info from keyring.")
             return ""
+
+    @property
+    def totp(self):
+        totpsecret = self.totp_secret
+        return pyotp.TOTP(totpsecret).now() if totpsecret else None
 
     @totp.setter
     def totp(self, value):
@@ -137,6 +204,24 @@ class Credentials(ConfigNode):
             keyring.set_password(APP_NAME, "totp/" + self.username, value)
         except keyring.errors.KeyringError:
             logger.info("Cannot save totp secret to keyring.")
+
+    def resolve(self):
+        return ResolvedCredentials(self.username, self.password, self.totp)
+
+
+@attr.s
+class ResolvedCredentials:
+    """Credential values snapshotted in the main process.
+
+    The browser runs in a separate process; reading the keyring from there
+    would open a second session to the secret service, in a process that has no
+    terminal to prompt on if it turns out to be locked. The secrets are kept
+    out of the `repr` because it is logged when auto-login starts.
+    """
+
+    username = attr.ib()
+    password = attr.ib(repr=False)
+    totp = attr.ib(repr=False, default=None)
 
 
 @attr.s

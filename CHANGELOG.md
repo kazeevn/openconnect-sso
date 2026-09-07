@@ -1,5 +1,27 @@
 # Changelog
 
+## Unreleased
+
+- Add `--network-manager`, handing the authenticated session to NetworkManager's
+  `openconnect` plugin so that the tunnel is a normal NetworkManager VPN
+  connection instead of an `openconnect` process owned by the terminal. The
+  connection is created if missing, and no `sudo` is needed.
+- Add `--no-totp` for second factors approved out of band, and stop asking for a
+  TOTP secret again once it has been declined
+- Only auto-fill and click elements that are visible. Login pages carry hidden
+  duplicates of the fields they post, which were being filled instead of the
+  real ones
+- Auto-fill through the native value setter so that framework-driven login pages
+  (Entra ID, among others) register the typed value
+- Submit a form only on the pass after it was filled, so it is not submitted
+  before the page has processed the value
+- Add auto-fill rules for AD FS, which Entra ID hands the password step to for
+  federated domains
+- Add a `requires` field to auto-fill rules, so that the TOTP rules no longer
+  navigate away from a push-notification approval screen
+- Log from the browser subprocess, including what the auto-fill script does
+- Fix a missing credential being filled in as the literal string `null`
+
 ## v0.8.2
 
 - fix #34

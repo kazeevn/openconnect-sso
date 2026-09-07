@@ -5,6 +5,7 @@ import logging
 import os
 import signal
 import subprocess
+import sys
 from pathlib import Path
 
 import shlex
@@ -13,10 +14,11 @@ import structlog
 from prompt_toolkit import HTML
 from prompt_toolkit.shortcuts import radiolist_dialog
 
-from openconnect_sso import config
+from openconnect_sso import config, network_manager
 from openconnect_sso.authenticator import Authenticator, AuthResponseError
 from openconnect_sso.browser import Terminated
 from openconnect_sso.config import Credentials
+from openconnect_sso.network_manager import NetworkManagerError
 from openconnect_sso.profile import get_profiles
 
 from requests.exceptions import HTTPError
@@ -34,7 +36,7 @@ def run(args):
             asyncio.set_event_loop(asyncio.ProactorEventLoop())
         loop = asyncio.new_event_loop()
         asyncio.set_event_loop(loop)
-        auth_response, selected_profile = loop.run_until_complete(
+        auth_response, selected_profile, profile_address = loop.run_until_complete(
             _run(args, cfg)
         )
     except KeyboardInterrupt:
@@ -55,6 +57,9 @@ def run(args):
     except HTTPError as exc:
         logger.error(f"Request error: {exc}")
         return 4
+    except NetworkManagerError as exc:
+        logger.error(f"NetworkManager error: {exc}")
+        return 5
 
     config.save(cfg)
 
@@ -72,6 +77,30 @@ def run(args):
                 "\n".join(f"{k.upper()}={shlex.quote(v)}" for k, v in details.items())
             )
         return 0
+
+    if args.network_manager:
+        if args.openconnect_args:
+            logger.warn(
+                "Ignoring openconnect arguments, NetworkManager runs openconnect",
+                args=args.openconnect_args,
+            )
+        connection_name = (
+            selected_profile.name
+            if args.network_manager is True
+            else args.network_manager
+        )
+        try:
+            return network_manager.connect(
+                connection_name,
+                auth_response,
+                selected_profile.vpn_url,
+                profile_address.vpn_url,
+                args.ac_version,
+                create=args.nm_create,
+            )
+        except NetworkManagerError as exc:
+            logger.error(f"NetworkManager error: {exc}")
+            return 5
 
     try:
         return run_openconnect(
@@ -113,18 +142,13 @@ async def _run(args, cfg):
     credentials = None
     if cfg.credentials:
         credentials = cfg.credentials
+        if args.user and args.user != credentials.username:
+            credentials = Credentials(args.user)
     elif args.user:
         credentials = Credentials(args.user)
 
-    if credentials and not credentials.password:
-        credentials.password = getpass.getpass(prompt=f"Password ({args.user}): ")
-        cfg.credentials = credentials
-
-    if credentials and not credentials.totp:
-        credentials.totp = getpass.getpass(
-            prompt=f"TOTP secret (leave blank if not required) ({args.user}): "
-        )
-        cfg.credentials = credentials
+    if credentials:
+        setup_credentials(args, cfg, credentials)
 
     if cfg.default_profile and not (args.use_profile_selector or args.server):
         selected_profile = cfg.default_profile
@@ -158,7 +182,32 @@ async def _run(args, cfg):
     if args.on_disconnect and not cfg.on_disconnect:
         cfg.on_disconnect = args.on_disconnect
 
-    return auth_response, selected_profile
+    return auth_response, selected_profile, cfg.default_profile
+
+
+def setup_credentials(args, cfg, credentials):
+    """Complete `credentials` from the keyring, asking for what is missing."""
+    if not credentials.password:
+        if not sys.stdin.isatty():
+            raise ValueError(
+                f"No password saved for {credentials.username} and cannot ask for one. "
+                "Run openconnect-sso from a terminal once to save it in the keyring",
+                21,
+            )
+        credentials.password = getpass.getpass(
+            prompt=f"Password ({credentials.username}): "
+        )
+
+    if args.no_totp:
+        if credentials.totp_secret:
+            # Recorded so that subsequent runs neither ask nor use it.
+            credentials.totp = ""
+    elif credentials.totp_secret is None and sys.stdin.isatty():
+        credentials.totp = getpass.getpass(
+            prompt=f"TOTP secret (leave blank if not required) ({credentials.username}): "
+        )
+
+    cfg.credentials = credentials
 
 
 async def select_profile(profile_list):
@@ -182,7 +231,9 @@ async def select_profile(profile_list):
 
 def authenticate_to(host, proxy, credentials, display_mode, version):
     logger.info("Authenticating to VPN endpoint", name=host.name, address=host.address)
-    return Authenticator(host, proxy, credentials, version).authenticate(display_mode)
+    return Authenticator(
+        host, proxy, credentials.resolve() if credentials else None, version
+    ).authenticate(display_mode)
 
 
 def run_openconnect(auth_info, host, proxy, version, args):

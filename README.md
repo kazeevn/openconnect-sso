@@ -169,6 +169,28 @@ Configuration is saved in `$XDG_CONFIG_HOME/openconnect-sso/config.toml`. On
 typical Linux installations it is located under
 `$HOME/.config/openconnect-sso/config.toml`
 
+Auto-fill rules only act on elements that are actually visible, because login
+pages routinely carry a hidden duplicate of the field they post. A `stop` rule
+triggers when its element holds a non-empty message, so that a container which
+is always present -- AD FS keeps an empty error `<span>` in the DOM -- does not
+halt the login before it starts. A rule may also name a credential it depends
+on:
+
+```
+[[auto_fill_rules."https://*"]]
+selector = "a[id=signInAnotherWay]"
+action = "click"
+requires = "totp"
+```
+
+Such a rule is skipped entirely when that credential is not configured, so a
+flow meant to be completed by hand -- approving a push notification -- is not
+navigated away from.
+
+If your `config.toml` still holds the auto-fill rules a previous version wrote
+and you never edited them, they are replaced with the current defaults on load.
+Edited rules are left alone.
+
 For CISCO-VPN and TOTP the following seems to work by tuning the config.toml
 and removing the default "submit"-action to the following:
 
@@ -181,6 +203,48 @@ action = "click"
 selector = "input[type=tel]"
 fill = "totp"
 ```
+
+### Second factors approved out of band
+
+Use `--no-totp` when the second factor is approved out of band -- a push
+notification on a phone, for example -- so that no TOTP secret is asked for and
+the auto-login does not navigate away from the approval screen.
+
+### Running as a NetworkManager connection
+
+With `-N`/`--network-manager` the tunnel is owned by NetworkManager instead of
+by the terminal `openconnect-sso` was started from. `openconnect-sso` performs
+the SSO login and hands NetworkManager's `openconnect` plugin the resulting
+session cookie, gateway and server certificate hash, which is what its
+graphical authentication dialog would otherwise have collected:
+
+```shell
+$ openconnect-sso --network-manager
+[info     ] Authenticating to VPN endpoint ...
+[info     ] Activating NetworkManager VPN connection name='...'
+[info     ] VPN connection is up           name='...'
+```
+
+The connection then behaves like any other NetworkManager VPN: it appears in
+the desktop applet, NetworkManager owns its routes and DNS, and it is
+disconnected with `nmcli connection down id '<name>'`. No `sudo` is involved.
+
+The connection to activate defaults to the profile name; pass a name to use an
+existing one:
+
+```shell
+$ openconnect-sso --network-manager 'Work VPN'
+```
+
+A missing connection is created, restricted to the current user and with
+autoconnect disabled -- autoconnecting would only raise the graphical
+authentication dialog this path exists to avoid. Pass `--no-nm-create` to fail
+instead of creating it. Secrets are never written to the connection profile:
+they are marked as not-saved and supplied on each activation.
+
+Note that `openconnect` arguments after `--` are ignored in this mode, since
+NetworkManager builds the `openconnect` command line itself. Its equivalents
+live in the connection profile (`nmcli connection modify`).
 
 ### Adding custom `openconnect` arguments
 
