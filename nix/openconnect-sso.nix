@@ -38,6 +38,7 @@ buildPythonApplication rec {
   ++ (with python3Packages; [
     attrs
     colorama
+    cryptography
     lxml
     keyring
     prompt_toolkit

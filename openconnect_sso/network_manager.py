@@ -211,7 +211,7 @@ def deactivate(name):
     )
 
 
-def connect(name, auth_info, connect_url, profile_url, version, create=True):
+def connect(name, cookie, server_cert, connect_url, profile_url, version, create=True):
     """Bring up `name`, creating it from the profile first if it is missing.
 
     `connect_url` is the -- possibly load-balanced -- host the SSO session was
@@ -227,5 +227,5 @@ def connect(name, auth_info, connect_url, profile_url, version, create=True):
         create_connection(name, profile_url, version)
     if is_active(name):
         deactivate(name)
-    activate(name, connect_url, auth_info.session_token, auth_info.server_cert_hash)
+    activate(name, connect_url, cookie, server_cert)
     return 0

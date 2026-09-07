@@ -1,13 +1,6 @@
-import attr
 import pytest
 
 from openconnect_sso import network_manager
-
-
-@attr.s
-class AuthInfo:
-    session_token = attr.ib(default="cookie-value")
-    server_cert_hash = attr.ib(default="pin-sha256:abcd")
 
 
 @pytest.mark.parametrize(
@@ -56,7 +49,13 @@ def test_missing_connection_is_not_created_when_creation_is_disabled(monkeypatch
     monkeypatch.setattr(network_manager, "connection_exists", lambda name: False)
     with pytest.raises(network_manager.NetworkManagerError):
         network_manager.connect(
-            "VPN", AuthInfo(), "https://a/g", "https://b/g", "4.7.00136", create=False
+            "VPN",
+            "cookie",
+            "pin-sha256:abcd",
+            "https://a/g",
+            "https://b/g",
+            "4.7.00136",
+            create=False,
         )
 
 
@@ -70,7 +69,7 @@ def test_active_connection_is_restarted_with_the_fresh_cookie(monkeypatch):
     monkeypatch.setattr(network_manager, "activate", lambda *a: order.append("up"))
 
     network_manager.connect(
-        "VPN", AuthInfo(), "https://a/g", "https://b/g", "4.7.00136"
+        "VPN", "cookie", "pin-sha256:abcd", "https://a/g", "https://b/g", "4.7.00136"
     )
 
     assert order == ["down", "up"]

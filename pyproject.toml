@@ -15,6 +15,7 @@ classifiers = [
 dependencies = [
     "attrs>=18.2",
     "colorama>=0.4.0",
+    "cryptography>=41",
     "lxml>=4.3",
     "keyring>=21.1",
     "prompt-toolkit>=3.0.3",

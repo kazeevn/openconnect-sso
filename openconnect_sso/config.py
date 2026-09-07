@@ -235,6 +235,8 @@ class Config(ConfigNode):
         },
     )
     on_disconnect = attr.ib(converter=str, default="")
+    # Gateway URL -> the public key pin trusted for it on first use.
+    server_certificates = attr.ib(factory=dict)
 
 
 class DisplayMode(enum.Enum):
