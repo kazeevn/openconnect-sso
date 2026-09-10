@@ -204,47 +204,6 @@ selector = "input[type=tel]"
 fill = "totp"
 ```
 
-### Server certificate checking
-
-`openconnect --servercert` implies `--no-system-trust`: the fingerprint it is
-given replaces CA validation rather than adding to it. Passing on the
-fingerprint that the gateway reports about *itself* -- which is what
-`openconnect-sso` used to do -- therefore leaves the tunnel trusting whatever
-the far end claims.
-
-Instead, the gateway's certificate is fetched over a validating handshake,
-and its public key is remembered the first time it is seen:
-
-```shell
-$ openconnect-sso
-[info     ] Remembering VPN gateway certificate  subject='CN=vpn.server.com,...'
-                                                 pin='pin-sha256:ThiISDgAjcxG...'
-```
-
-That pin is what `openconnect` is then told to accept, and it is saved under
-`[server_certificates]` in `config.toml`. On later connections the certificate
-has to match it:
-
-```shell
-$ openconnect-sso
-[error    ] Certificate error: The certificate of https://vpn.server.com/group
-            changed since it was last trusted (remembered pin-sha256:ThiISDgAjcx...,
-            now pin-sha256:+M+J9lb6D/S...). This is expected after a certificate
-            renewal that also rolled the key; verify it out of band, then re-run
-            with --trust-new-cert to accept it
-```
-
-`--trust-new-cert` accepts and remembers whatever the gateway currently
-presents. It is needed after a renewal that rolled the server's key, and the
-first time a gateway is used whose certificate no CA vouches for -- such a
-certificate is never trusted silently, which is what makes this trust on *first
-use* rather than trust on every use.
-
-The key is pinned rather than the certificate, so an ordinary renewal that
-keeps the same key does not raise an alarm. Behind a `--proxy` the certificate
-cannot be fetched independently, so the gateway's own fingerprint is used and a
-warning says so.
-
 ### Second factors approved out of band
 
 Use `--no-totp` when the second factor is approved out of band -- a push

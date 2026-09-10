@@ -34,14 +34,14 @@ def test_secrets_are_passed_in_a_private_file_and_not_on_the_command_line(
     monkeypatch.setattr(network_manager, "_nmcli", fake_nmcli)
 
     network_manager.activate(
-        "VPN", "https://vpn.example.com/group", "cookie-value", "pin-sha256:abcd"
+        "VPN", "https://vpn.example.com/group", "cookie-value", "A1B2C3D4"
     )
 
     assert "cookie-value" not in str(calls)
     assert fake_nmcli.secrets == (
         "vpn.secrets.gateway:https://vpn.example.com/group\n"
         "vpn.secrets.cookie:cookie-value\n"
-        "vpn.secrets.gwcert:pin-sha256:abcd\n"
+        "vpn.secrets.gwcert:A1B2C3D4\n"
     )
 
 
@@ -51,7 +51,7 @@ def test_missing_connection_is_not_created_when_creation_is_disabled(monkeypatch
         network_manager.connect(
             "VPN",
             "cookie",
-            "pin-sha256:abcd",
+            "A1B2C3D4",
             "https://a/g",
             "https://b/g",
             "4.7.00136",
@@ -69,7 +69,7 @@ def test_active_connection_is_restarted_with_the_fresh_cookie(monkeypatch):
     monkeypatch.setattr(network_manager, "activate", lambda *a: order.append("up"))
 
     network_manager.connect(
-        "VPN", "cookie", "pin-sha256:abcd", "https://a/g", "https://b/g", "4.7.00136"
+        "VPN", "cookie", "A1B2C3D4", "https://a/g", "https://b/g", "4.7.00136"
     )
 
     assert order == ["down", "up"]

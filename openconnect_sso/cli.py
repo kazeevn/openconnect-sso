@@ -113,16 +113,6 @@ def create_argparser():
     )
 
     parser.add_argument(
-        "--trust-new-cert",
-        help="Trust the certificate the VPN gateway currently presents and "
-        "remember it, even if no CA vouches for it or a different one was "
-        "remembered before. Needed the first time a self-signed gateway is used, "
-        "and after a certificate renewal that rolled the server's key",
-        action="store_true",
-        default=False,
-    )
-
-    parser.add_argument(
         "-V", "--version", action="version", version=f"%(prog)s {__version__}"
     )
 

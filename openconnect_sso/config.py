@@ -60,7 +60,10 @@ class ConfigNode:
     def from_dict(cls, d):
         if d is None:
             return None
-        return cls(**d)
+        # Unknown keys (e.g. settings of past versions) are skipped rather
+        # than failing the whole config load.
+        known = {f.name for f in attr.fields(cls)}
+        return cls(**{k: v for k, v in d.items() if k in known})
 
     def as_dict(self):
         return attr.asdict(self)
@@ -235,8 +238,6 @@ class Config(ConfigNode):
         },
     )
     on_disconnect = attr.ib(converter=str, default="")
-    # Gateway URL -> the public key pin trusted for it on first use.
-    server_certificates = attr.ib(factory=dict)
 
 
 class DisplayMode(enum.Enum):

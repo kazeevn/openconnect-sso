@@ -6,12 +6,6 @@
   `openconnect` plugin so that the tunnel is a normal NetworkManager VPN
   connection instead of an `openconnect` process owned by the terminal. The
   connection is created if missing, and no `sudo` is needed.
-- Check the gateway's certificate against the system CA store and pin its public
-  key on first use, instead of passing on the fingerprint the gateway reports
-  about itself. `--servercert` implies `--no-system-trust`, so that fingerprint
-  was the only thing standing between the tunnel and any server that claimed to
-  be the gateway. A changed key is now refused until `--trust-new-cert` says
-  otherwise, and a gateway no CA vouches for is never trusted silently
 - Add `--no-totp` for second factors approved out of band, and stop asking for a
   TOTP secret again once it has been declined
 - Only auto-fill and click elements that are visible. Login pages carry hidden

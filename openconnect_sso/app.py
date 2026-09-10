@@ -14,10 +14,9 @@ import structlog
 from prompt_toolkit import HTML
 from prompt_toolkit.shortcuts import radiolist_dialog
 
-from openconnect_sso import certificate, config, network_manager
+from openconnect_sso import config, network_manager
 from openconnect_sso.authenticator import Authenticator, AuthResponseError
 from openconnect_sso.browser import Terminated
-from openconnect_sso.certificate import CertificateError
 from openconnect_sso.config import Credentials
 from openconnect_sso.network_manager import NetworkManagerError
 from openconnect_sso.profile import get_profiles
@@ -62,14 +61,6 @@ def run(args):
         logger.error(f"NetworkManager error: {exc}")
         return 5
 
-    try:
-        server_cert = verify_server_certificate(
-            args, cfg, selected_profile, profile_address, auth_response
-        )
-    except CertificateError as exc:
-        logger.error(f"Certificate error: {exc}")
-        return 6
-
     config.save(cfg)
 
     if args.authenticate:
@@ -77,7 +68,7 @@ def run(args):
         details = {
             "host": selected_profile.vpn_url,
             "cookie": auth_response.session_token,
-            "fingerprint": server_cert,
+            "fingerprint": auth_response.server_cert_hash,
         }
         if args.authenticate == "json":
             print(json.dumps(details, indent=4))
@@ -102,7 +93,7 @@ def run(args):
             return network_manager.connect(
                 connection_name,
                 auth_response.session_token,
-                server_cert,
+                auth_response.server_cert_hash,
                 selected_profile.vpn_url,
                 profile_address.vpn_url,
                 args.ac_version,
@@ -115,7 +106,7 @@ def run(args):
     try:
         return run_openconnect(
             auth_response.session_token,
-            server_cert,
+            auth_response.server_cert_hash,
             selected_profile,
             args.proxy,
             args.ac_version,
@@ -245,32 +236,6 @@ def authenticate_to(host, proxy, credentials, display_mode, version):
     return Authenticator(
         host, proxy, credentials.resolve() if credentials else None, version
     ).authenticate(display_mode)
-
-
-def verify_server_certificate(args, cfg, connect_profile, profile, auth_response):
-    """Return the pin to hand to openconnect for this gateway.
-
-    Falls back to the fingerprint the gateway reported about itself when the
-    certificate cannot be fetched independently, which is the case behind a
-    proxy -- no worse than what openconnect-sso did before, and said out loud.
-    """
-    if args.proxy:
-        logger.warn(
-            "Not checking the gateway certificate: it cannot be fetched through a proxy",
-            proxy=args.proxy,
-        )
-        return auth_response.server_cert_hash
-
-    server_cert = certificate.fetch(connect_profile.vpn_url)
-    certificate.check_reported_hash(server_cert, auth_response.server_cert_hash)
-    # Keyed on the profile address rather than the host actually connected to,
-    # because a load-balanced gateway answers on a different name every time.
-    return certificate.trust(
-        server_cert,
-        cfg.server_certificates,
-        profile.vpn_url,
-        accept_new=args.trust_new_cert,
-    )
 
 
 def run_openconnect(session_token, server_cert, host, proxy, version, args):
