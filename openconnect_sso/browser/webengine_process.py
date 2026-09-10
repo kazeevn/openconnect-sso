@@ -35,7 +35,12 @@ import structlog
 
 from PyQt6.QtCore import QUrl, QTimer, pyqtSlot, Qt
 from PyQt6.QtNetwork import QNetworkCookie, QNetworkProxy
-from PyQt6.QtWebEngineCore import QWebEngineScript, QWebEngineProfile, QWebEnginePage
+from PyQt6.QtWebEngineCore import (
+    QWebEngineProfile,
+    QWebEngineScript,
+    QWebEngineSettings,
+    QWebEnginePage,
+)
 from PyQt6.QtWebEngineWidgets import QWebEngineView
 from PyQt6.QtWidgets import QApplication, QWidget, QSizePolicy, QVBoxLayout
 
@@ -133,25 +138,18 @@ class Process(multiprocessing.Process):
 
         app = QApplication(argv)
 
+        profile = QWebEngineProfile("openconnect-sso")
+
         # Configure WebEngine settings for better compatibility
         try:
-            from PyQt6.QtWebEngineCore import QWebEngineSettings
-
             # Disable hardware acceleration if GLX issues occur
-            settings = QWebEngineSettings.globalSettings()
+            settings = profile.settings()
             settings.setAttribute(
                 QWebEngineSettings.WebAttribute.Accelerated2dCanvasEnabled, False
             )
             settings.setAttribute(QWebEngineSettings.WebAttribute.WebGLEnabled, False)
-        except ImportError:
-            # Fallback if QWebEngineSettings is not available
-            logger.warning(
-                "Could not configure WebEngine settings - some graphics features may not work"
-            )
         except Exception as e:
             logger.warning("Failed to configure WebEngine settings", error=str(e))
-
-        profile = QWebEngineProfile("openconnect-sso")
 
         if self.proxy:
             parsed = urlparse(self.proxy)
